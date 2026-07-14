@@ -1,0 +1,21 @@
+# ESP-IDF build artifacts
+firmware/*/build/
+firmware/*/sdkconfig
+firmware/*/sdkconfig.old
+firmware/*/sdkconfig.bak*
+firmware/*/managed_components/
+firmware/*/dependencies.lock
+
+# editors
+.vscode/
+.idea/
+
+# python
+__pycache__/
+*.pyc
+
+# measurement data — large session captures and the observation database
+data/raw/
+data/rff.db
+*.db
+*.csv
