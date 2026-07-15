@@ -17,7 +17,11 @@ Verdicts per source (χ² thresholds on Mahalanobis² in (CFO, SFO) space):
   STABLE     new windows fall inside own 95% ellipse
   DRIFTING   own-source d² between 95% and 99% — watch it
   ANOMALY    claimed MAC but signature rejects at 99% — investigate
+  REBASE     20 consecutive anomalies: baseline judged stale (thermal
+             warm-up / relocation), model reset and relearning. A spoofer
+             produces INTERMITTENT anomalies, not an unbroken streak.
 """
+REBASELINE_STREAK = 20
 import argparse
 import queue
 import sys
@@ -101,9 +105,18 @@ class SourceRow:
         self.d2_self = None
         self.verdict = "LEARNING"
         self.corrected = False
+        self.anomaly_streak = 0
 
 
-def feature(obs):
+def feature(obs, require_ref=False):
+    """(CFO, SFO) feature vector.
+
+    With a reference beacon configured, only reference-corrected windows
+    are usable — mixing raw and corrected values in one source model
+    shifts its centroid and permanently poisons classification.
+    """
+    if require_ref and "cfo_ref" not in obs and "sfo_ref" not in obs:
+        return None
     cfo = obs.get("cfo_ref", obs.get("cfo"))
     sfo = obs.get("sfo_ref", obs.get("sfo"))
     if cfo is None or sfo is None:
@@ -221,7 +234,7 @@ def main():
                     "sfo": obs.get("sfo_ref", obs.get("sfo")),
                     "sfo_iqr": obs.get("sfo_iqr")})
 
-                f = feature(obs)
+                f = feature(obs, require_ref=bool(args.ref_mac))
                 verdict = "LEARNING"
                 d2 = None
                 if f is not None:
@@ -230,8 +243,21 @@ def main():
                         verdict = ("STABLE" if d2 <= CHI2_95 else
                                    "DRIFTING" if d2 <= CHI2_99 else
                                    "ANOMALY")
-                    # anomalous windows must not poison the model
-                    if verdict != "ANOMALY":
+                    # anomalous windows must not poison the model — but a
+                    # long UNBROKEN streak isn't a spoofer (those inject
+                    # intermittently among genuine traffic), it means the
+                    # stored baseline is stale (thermal warm-up, board
+                    # relocated, ref newly warmed). Re-baseline and relearn.
+                    if verdict == "ANOMALY":
+                        row.anomaly_streak += 1
+                        if row.anomaly_streak >= REBASELINE_STREAK:
+                            disc.models.pop(mac, None)
+                            row.anomaly_streak = 0
+                            verdict = "REBASE"
+                            d2 = None
+                            disc.learn(mac, f)
+                    else:
+                        row.anomaly_streak = 0
                         disc.learn(mac, f)
                 row.d2_self = d2
                 row.verdict = verdict

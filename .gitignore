@@ -1,5 +1,5 @@
 # ESP-IDF build artifacts
-firmware/*/build/
+firmware/*/build*/
 firmware/*/sdkconfig
 firmware/*/sdkconfig.old
 firmware/*/sdkconfig.bak*

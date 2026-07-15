@@ -38,7 +38,17 @@ class ReferenceNormalizer:
             return obs, False
         if mac.lower() == self.ref_mac:
             self.tracker.update(obs)
-            return obs, False
+            if not self.ready:
+                return obs, False
+            # the reference's own corrected value is its innovation vs the
+            # smoothed track (~0-centered) — keeps every source in the same
+            # "relative to reference" feature space
+            out = dict(obs)
+            if obs.get("cfo") is not None:
+                out["cfo_ref"] = obs["cfo"] - self.tracker.cfo.x
+            if obs.get("sfo") is not None:
+                out["sfo_ref"] = obs["sfo"] - self.tracker.sfo.x
+            return out, True
         if not self.ready:
             return obs, False
         out = dict(obs)

@@ -79,8 +79,15 @@ def collect_observations(paths, window, ref_mac):
     return by_mac
 
 
-def feature(obs):
-    """(CFO, SFO) feature vector, preferring reference-corrected values."""
+def feature(obs, require_ref=False):
+    """(CFO, SFO) feature vector, preferring reference-corrected values.
+
+    With a reference beacon configured, uncorrected windows are dropped:
+    mixing raw and corrected values in one source model shifts its
+    centroid (see rff_live for the live-side equivalent).
+    """
+    if require_ref and "cfo_ref" not in obs and "sfo_ref" not in obs:
+        return None
     cfo = obs.get("cfo_ref", obs.get("cfo"))
     sfo = obs.get("sfo_ref", obs.get("sfo"))
     if cfo is None or sfo is None:
@@ -108,7 +115,8 @@ def report(by_mac, min_windows, ref_mac):
     trackers = {}
     for mac in macs:
         obs_list = by_mac[mac]
-        feats = [f for f in (feature(o) for o in obs_list) if f is not None]
+        feats = [f for f in (feature(o, bool(ref_mac)) for o in obs_list)
+                 if f is not None]
         tr = DriftTracker()
         for o in obs_list:
             tr.update({"cfo": o.get("cfo_ref", o.get("cfo")),
@@ -132,7 +140,7 @@ def report(by_mac, min_windows, ref_mac):
     disc = Discriminator()
     train, test = {}, {}
     for mac in macs:
-        feats = [f for f in (feature(o) for o in by_mac[mac])
+        feats = [f for f in (feature(o, bool(ref_mac)) for o in by_mac[mac])
                  if f is not None]
         cut = max(int(len(feats) * TRAIN_FRACTION), 1)
         train[mac], test[mac] = feats[:cut], feats[cut:]
@@ -188,13 +196,13 @@ def report(by_mac, min_windows, ref_mac):
     return disc, trackers
 
 
-def persist(by_mac, disc, db_path):
+def persist(by_mac, disc, db_path, require_ref=False):
     store = Store(db_path)
     now = time.time()
     for mac, obs_list in by_mac.items():
         sid = store.source_id(mac, now=now)
         for o in obs_list:
-            f = feature(o)
+            f = feature(o, require_ref)
             d2 = disc.self_consistency(mac, f) if f is not None else None
             store.add_observation(sid, "offline", o.get("ts_pc"), o,
                                   d2_self=d2)
@@ -216,6 +224,10 @@ def main():
                     help="frames per observation window (default 64)")
     ap.add_argument("--min-windows", type=int, default=4,
                     help="min windows for a source to enter the analysis")
+    ap.add_argument("--only-macs", help="comma-separated MACs to classify "
+                    "(others still used for reference correction, then "
+                    "dropped from the analysis) — e.g. to exclude a "
+                    "clock-twin from the discrimination test")
     ap.add_argument("--db", nargs="?", const=DEFAULT_DB, default=None,
                     help="persist observations+models to SQLite "
                     "(default path data/rff.db)")
@@ -230,11 +242,18 @@ def main():
 
     print(f"replaying {len(paths)} session file(s)...", file=sys.stderr)
     by_mac = collect_observations(paths, args.window, args.ref_mac)
+    if args.only_macs:
+        keep = {m.strip().lower() for m in args.only_macs.split(",")}
+        # reference correction already applied during collection; now
+        # restrict the analysis to the chosen classification targets
+        by_mac = {m: o for m, o in by_mac.items() if m in keep}
+        print(f"(classifying only {len(by_mac)} of the collected sources)",
+              file=sys.stderr)
     result = report(by_mac, args.min_windows, args.ref_mac)
     if result is None:
         return 1
     if args.db:
-        persist(by_mac, result[0], args.db)
+        persist(by_mac, result[0], args.db, require_ref=bool(args.ref_mac))
     return 0
 
 

@@ -24,6 +24,9 @@ HEADER = ["pc_time_us", "label", "seq", "mac", "rssi", "noise_floor",
 def compute_cfo(csi_data):
     """Calculates phase slope (CFO) using linear regression on unwrapped phase."""
     iq = np.array(csi_data, dtype=np.float32)
+    iq = iq[: len(iq) & ~1]          # drop a trailing odd byte: i/q must pair
+    if iq.size < 4:
+        return 0.0
     complex_csi = iq[0::2] + 1j * iq[1::2]
     phases = np.unwrap(np.angle(complex_csi))
     slope, _ = np.polyfit(np.arange(len(phases)), phases, 1)

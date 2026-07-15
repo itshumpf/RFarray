@@ -1,0 +1,3 @@
+# csi_tx defaults for ESP32-S3 (Heltec) — native USB console, no custom UART.
+# 1 ms tick so the 100 Hz (10 ms) beacon cadence is accurate.
+CONFIG_FREERTOS_HZ=1000
