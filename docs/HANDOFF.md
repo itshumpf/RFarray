@@ -56,20 +56,27 @@ motion + respiration + zones + label scoring), `occ_capture.py`
 (keyboard-labeled ground truth), `test_occ_synth.py` (synthetic DSP
 checks, all passing). Protocol for honest rates: `docs/OCC_PROTOCOL.md`.
 
-**Measured (assumed labels: overnight 03:11-08:40 Jul-14 = empty,
-evening 20:17-00:10 Jul-15 = user at desk; scripted labeled session
-still pending):**
+**Measured (assumed labels: overnight 03:11-08:40 Jul-14 = no known
+occupant in the sensed room, evening 20:17-00:10 Jul-15 = user at
+desk; scripted labeled session still pending). Household context that
+bounds the claims: 2 cats roam freely, family (incl. son) sleeps in
+other rooms, and neighbors are close — the overnight null is NOT a
+guaranteed-empty house:**
 
 - Motion: overnight interior (03:45-08:20) flagged 0.50% of time —
-  8 events of 5-27 s, several at plausible wake-adjacent times, so
-  0.5% is an *upper bound* on false alarm. Evening: 53% active,
-  97 events. Detection edges match the human narrative to the minute
-  (to-bed 03:11-03:26, wake 08:36).
+  8 events of 5-27 s. With free-roaming cats these may be TRUE
+  detections, so 0.5% is activity-flagged time, not a false-alarm
+  rate; the controlled empty segment in the protocol measures that.
+  Evening: 53% active, 97 events. Detection edges match the human
+  narrative to the minute (to-bed 03:11-03:26, wake 08:36).
 - Respiration (still person): evening quiet segments 35/45 link-scans
   flagged presence, 7-12 bpm at 10-14 dB SNR, 10/10 subcarrier
-  frequency consensus. Overnight: 0/24 flagged. The separation between
-  an occupied-but-still room and an empty one is unambiguous on this
-  data.
+  frequency consensus. Overnight: 0/24 above threshold. The separation
+  between an occupied-but-still sensed room and a nobody-in-the-room
+  night is unambiguous on this data. One overnight near-hit (B1
+  03:52-04:08, 4.9 dB, 10 bpm, 8/10 agree) is a candidate through-wall
+  sleeper — most plausibly the son in an adjacent room; the protocol
+  has a `wall-sleeper` test to confirm.
 - Zones: evening events cluster into 3 stable cross-link profiles
   (e.g. B3-dominant vs B2/B1-dominant); geometry is resolvable, but
   naming clusters needs a labeled calibration walk.
@@ -93,10 +100,13 @@ still pending):**
 ## Open threads, highest value first
 
 0. **Run the scripted occupancy session** (`docs/OCC_PROTOCOL.md`,
-   ~20 min) — converts the assumed-label results above into honest
-   labeled detection/false-alarm rates, and a per-zone labeled walk
-   names the three cross-link clusters. Also: find out what changed
-   B3's path (-13 dB) on Jul-15.
+   ~25 min) — converts the assumed-label results above into honest
+   labeled detection/false-alarm rates (cats excluded during `empty`),
+   measures pet immunity with labeled cat segments (rate band 20-30 vs
+   12-20 bpm is a human/cat discriminator), and optionally confirms
+   the through-wall sleeper. A per-zone labeled walk names the three
+   cross-link clusters. Also: find out what changed B3's path (-13 dB)
+   on Jul-15.
 1. **Embed TX die temperature in beacon payloads.** No weather hardware
    exists yet — but every ESP32 has an internal temp sensor. Extend the
    8-byte beacon (`magic|seq`) with temp; collector logs it per frame;
