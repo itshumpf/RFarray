@@ -210,6 +210,46 @@ spoofer can't teach the system its own signature.
 instead) and the node drops its console to 115200 baud, shows SAFE BOOT
 on the OLED, keeps RF off, and idles for reflash/diagnostics.
 
+## Occupancy sensing (Phase 3) — `pc/occ/`
+
+The fingerprinting track answers "who is transmitting"; this track
+answers "what is happening in the space", from the *amplitude* of the
+same captured frames (ESP32 phase is per-packet uncalibrated, so
+amplitude owns occupancy and phase owns fingerprinting). Additive to
+rff/ — it only imports the validated LLTF mapping.
+
+```
+capture CSV -> occ/ingest (per-link unit-mean |H| shape, esp-clock time
+  grid, .npz cached) -> occ/motion (windowed dispersion, empty-room-
+  calibrated z, 2-of-3 link fusion) -> occ/breathing (Welch PSD of quiet
+  segments, respiration-band SNR + subcarrier frequency consensus)
+  -> occ/zones (cross-link differential profiles -> coarse zones)
+```
+
+Key physics choices:
+- **AGC cancellation**: every frame's 52-bin amplitude vector is
+  normalized to unit mean; only the spectral *shape* is analyzed.
+- **Honest time axis**: pc_time is batch-stamped by the serial drain
+  (bursty); grids are built on the node's own esp timestamps
+  (unwrapped, reboot-resynced) so respiration FFTs see true sampling.
+- **Consensus tests everywhere**: motion needs 2-of-3 links (or one
+  link far above threshold); breathing needs several subcarriers
+  agreeing on one frequency — single-channel artifacts don't alarm.
+
+Tools:
+
+```
+python pc\occ_survey.py data\raw\rx_*.csv        # which sessions are usable
+python pc\occ_offline.py data\raw\rx_evening.csv --calib data\raw\rx_overnight.csv
+python pc\occ_capture.py COM3 --labels empty,walk,still,out   # ground truth
+python pc\test_occ_synth.py                      # synthetic DSP sanity checks
+```
+
+`occ_offline.py` reports motion timeline, respiration scans, zone
+profiles, and — when the CSV's label column is filled by a scripted
+`occ_capture.py` session (see `docs/OCC_PROTOCOL.md`) — honest
+per-label detection and false-alarm rates.
+
 ## Field-hardened firmware (fw v2) — site-audit infrastructure
 
 The desk prototype firmware was refactored for autonomous field

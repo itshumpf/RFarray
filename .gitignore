@@ -16,6 +16,8 @@ __pycache__/
 
 # measurement data — large session captures and the observation database
 data/raw/
+data/cache/
+data/plots/
 data/rff.db
 *.db
 *.csv

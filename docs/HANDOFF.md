@@ -48,8 +48,55 @@ builder + honest holdout scoring; `--only-macs`, `--ref-mac`),
   sessions/receivers (two RX agreed on a source's SFO to 0.0004 rad/sc)
   but does NOT help within-session same-model separation.
 
+## Phase 3: occupancy sensing (2026-07-17) — `pc/occ/`
+
+Amplitude-domain occupancy pipeline, additive to rff/ (imports only the
+LLTF mapping). Tools: `occ_survey.py`, `occ_offline.py` (calibrated
+motion + respiration + zones + label scoring), `occ_capture.py`
+(keyboard-labeled ground truth), `test_occ_synth.py` (synthetic DSP
+checks, all passing). Protocol for honest rates: `docs/OCC_PROTOCOL.md`.
+
+**Measured (assumed labels: overnight 03:11-08:40 Jul-14 = empty,
+evening 20:17-00:10 Jul-15 = user at desk; scripted labeled session
+still pending):**
+
+- Motion: overnight interior (03:45-08:20) flagged 0.50% of time —
+  8 events of 5-27 s, several at plausible wake-adjacent times, so
+  0.5% is an *upper bound* on false alarm. Evening: 53% active,
+  97 events. Detection edges match the human narrative to the minute
+  (to-bed 03:11-03:26, wake 08:36).
+- Respiration (still person): evening quiet segments 35/45 link-scans
+  flagged presence, 7-12 bpm at 10-14 dB SNR, 10/10 subcarrier
+  frequency consensus. Overnight: 0/24 flagged. The separation between
+  an occupied-but-still room and an empty one is unambiguous on this
+  data.
+- Zones: evening events cluster into 3 stable cross-link profiles
+  (e.g. B3-dominant vs B2/B1-dominant); geometry is resolvable, but
+  naming clusters needs a labeled calibration walk.
+
+**Methodological traps found and fixed (both cost real signal):**
+
+1. `pc_time_us` is stamped per serial *drain batch*, not per frame —
+   bursty, useless for spectra. Grids are built on unwrapped
+   `esp_timestamp_us` (reboot-resynced against pc time).
+2. The motion metric's noise floor scales ~1/sqrt(frames-per-bin) and
+   per-link rates shift between sessions; an unconditioned floor turned
+   B3's 55->37 fps change into a fake permanent +19.6 sigma. Floors are
+   count-conditioned now.
+3. Respiration band-edge peaks are 1/f drift leakage and fake perfect
+   subcarrier consensus; interior-local-max required now.
+4. Cross-session calibration transfer is guarded: a link whose RSSI
+   moved > 5 dB from calibration self-recalibrates (B3 physically
+   changed -64 -> -77 dBm sometime before the Jul-15 evening session —
+   worth asking what moved near it during the S3 bench work).
+
 ## Open threads, highest value first
 
+0. **Run the scripted occupancy session** (`docs/OCC_PROTOCOL.md`,
+   ~20 min) — converts the assumed-label results above into honest
+   labeled detection/false-alarm rates, and a per-zone labeled walk
+   names the three cross-link clusters. Also: find out what changed
+   B3's path (-13 dB) on Jul-15.
 1. **Embed TX die temperature in beacon payloads.** No weather hardware
    exists yet — but every ESP32 has an internal temp sensor. Extend the
    8-byte beacon (`magic|seq`) with temp; collector logs it per frame;
