@@ -1,0 +1,28 @@
+# csi_rx defaults, ESP32-S3 only.  Applied on top of sdkconfig.defaults.
+#
+# Console on native USB-Serial-JTAG, NOT UART0.  Set 2026-08-22.
+#
+# Why, so nobody quietly undoes it:
+#   emit() writes to stdout (common/telemetry/telemetry.c).  ESP-IDF's console
+#   layer writes every byte to BOTH the primary and secondary console, and the
+#   UART write busy-waits per byte on the TX FIFO (uart_vfs.c) because csi_rx
+#   never installs the buffered UART driver.  A UART in EITHER slot therefore
+#   throttles the drain path to 46,080 B/s = 162 fps at 284 B/frame.
+#
+#   The node offers 175-204 fps, so the 64-deep CSI queue overflowed by
+#   construction: 14.906% of samples dropped across the 6.5 h capture of
+#   2026-08-22.  6.163 ms of every 6.53 ms frame period was spent in that spin,
+#   on a GPIO1 that goes to a header pin nobody has ever connected.
+#
+#   Moving the console to USB-Serial-JTAG took queue drops to 0 in the
+#   verification run the same evening.  See docs/S3_LINK_PATH.md.
+#
+# Do not reinstate a UART console here, in either slot.
+# The D0WD has no USB-Serial-JTAG peripheral, which is why this is
+# target-specific and sdkconfig.defaults still carries the UART settings.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Consequence, not yet handled: hal_diag_console() is hard-coded to UART_NUM_0
+# (common/node_hal), so safe-boot output now goes to a pin with no console on
+# it.  Tracked as a V2 prerequisite in docs/V2_SPEC.md.

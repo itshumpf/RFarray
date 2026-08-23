@@ -1,0 +1,22 @@
+# i2c_scan defaults - ESP32-S3 only (Heltec WiFi LoRa 32 V3).
+#
+# Single-target project, like s3_throughput, so there is no
+# sdkconfig.defaults.s3 / build_s3 split: plain `idf.py build` is correct.
+CONFIG_IDF_TARGET="esp32s3"
+
+# Console on the native USB-Serial-JTAG peripheral, same as csi_rx's
+# current sdkconfig. This app's output is PLAIN TEXT, so `idf.py monitor`
+# is the right way to read it.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# NOTE: csi_rx and s3_throughput both set CONFIG_LIBC_STDOUT_LINE_ENDING_LF
+# because they emit binary frames that must not have \n rewritten. This app
+# emits text for a terminal, so that line is deliberately absent - leave
+# the default CRLF alone.
+
+CONFIG_FREERTOS_HZ=1000
+
+# Nothing here needs the radio, and the SX1262 shares pins with part of the
+# sweep set. Keep both stacks out of the way.
+# CONFIG_BT_ENABLED is not set
+# CONFIG_SPIRAM is not set

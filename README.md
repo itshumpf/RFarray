@@ -95,6 +95,24 @@ serial ──► pc/collect.py ──► data/raw/*.csv ──► pc/fingerprint
 - **data/raw/** — session recordings. Name them descriptively: `python pc\collect.py COM12 --out data\raw\baseline_night.csv`. Raw CSI at 100 Hz is ~250 MB/hour, so record deliberate sessions rather than 24/7; zip old ones.
 - **data/fingerprints/** — one JSON per device: normalized CSI amplitude template, template stability, RSSI stats, frame-length histogram.
 
+### Privacy
+
+This array doesn't just see my own devices — running promiscuously, it
+captures every WiFi transmitter in range: my household's devices, but
+also a neighbor's router and other nearby hardware that happened to be
+on the air, none of whom agreed to be recorded. The captured sessions
+are also, unavoidably, a log of my home: when rooms are occupied, when
+people are asleep, and what a still person's breathing looks like in
+CSI. That's true even of "ambient" sessions I wasn't deliberately
+pointing at anyone.
+
+Because of that, **the raw capture dataset (`data/raw/`) is not
+published**, and going forward I'm treating any file that names real
+devices or ties activity to real dates/times the same way. This is a
+privacy choice, not just a reproducibility one — the data describes
+people who never consented to being part of it, and I don't think a
+public repo is the right place for that regardless of consent.
+
 **Capturing from all nodes at once:** `capture.py` reads every node in one window with a live green CSI waterfall, writing one CSV per node into `data/raw/`:
 
 ```
@@ -192,8 +210,10 @@ python pc\rff_offline.py data\raw\desk_*.csv --ref-mac a4:f0:0f:77:91:20 --db
 ```
 
 First measured result (11 sessions, 2026-07-13, ref-corrected): pairwise
-separation 2.6 sigma, holdout accuracy 99.6% over 10k windows. Reference
-correction more than doubled the separation vs raw (1.0 sigma).
+separation 2.6 sigma, holdout accuracy 99.7% over 7,497 windows on the
+desk receiver alone, and 95.7% over 14,234 windows once node3's captures
+of the same sessions are included. Reference correction more than
+doubled the separation vs raw (1.0 sigma).
 
 **Live discrimination TUI** (one thread per node, same pipeline):
 

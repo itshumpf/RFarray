@@ -21,3 +21,5 @@ data/plots/
 data/rff.db
 *.db
 *.csv
+
+data/fingerprints/

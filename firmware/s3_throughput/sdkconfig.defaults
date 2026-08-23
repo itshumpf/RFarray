@@ -1,0 +1,31 @@
+# s3_throughput defaults - ESP32-S3 only (Heltec WiFi LoRa 32 V3).
+#
+# Unlike csi_tx, this project is single-target, so there is no
+# sdkconfig.defaults.s3 / build_s3 split: plain `idf.py build` is correct.
+CONFIG_IDF_TARGET="esp32s3"
+
+# Console AND data both leave over the native USB-Serial-JTAG peripheral.
+# No UART bridge is in the path, so there is no baud rate to set here and
+# none for the host to match - the host's baud field is ignored.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Binary serial output must NOT have \n translated to \r\n
+CONFIG_LIBC_STDOUT_LINE_ENDING_LF=y
+
+CONFIG_FREERTOS_HZ=1000
+
+# This measures a ceiling, so the firmware must not be the slow part.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# The blast loop does not yield while the TX ring has room, which starves
+# the idle task on its core. Without these the task watchdog panics
+# precisely when the link is FAST - i.e. it would destroy the result we
+# are trying to measure. Safe here because this firmware does nothing
+# else; do not copy these lines into csi_rx.
+# CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0 is not set
+# CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1 is not set
+
+# Nothing may compete for bus or CPU.
+# CONFIG_BT_ENABLED is not set
+# CONFIG_SPIRAM is not set

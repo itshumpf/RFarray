@@ -18,9 +18,12 @@
  */
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "driver/gpio.h"
 #include "esp_wifi.h"
 #include "esp_now.h"
 #include "esp_event.h"
@@ -58,11 +61,93 @@
 
 #define STATUS_PERIOD_MS    5000
 
-/* 0.96" SSD1306 status display (optional — headless if absent) */
+/* ------------------------------------------------------------------ *
+ * 0.96" SSD1306 status display (optional — headless if absent)
+ *
+ * csi_rx builds for BOTH the original ESP32 D0WD desk node and the
+ * Heltec ESP32-S3, and the two panels are wired completely differently.
+ * Everything in this block is target-conditional. The D0WD values are
+ * the ones this file has always carried and are unchanged; the #else
+ * branch is what that build sees, byte for byte.
+ *
+ * ESP32-S3 numbers below were MEASURED by firmware/i2c_scan on the
+ * benched Heltec (board MAC 8c:fd:49:b7:b0:6c), 2026-08-22. They are
+ * observations from that run, not a datasheet or a vendor pinout:
+ *
+ *   SDA = GPIO17, SCL = GPIO18, address 0x3C. 0x3C was the only address
+ *     that ever answered; nothing else sits on that bus.
+ *
+ *   The old OLED_SCL 22 cannot work here: GPIO22 does not exist on the
+ *     ESP32-S3 and gpio_config() returns a GPIO_PIN mask error for it.
+ *     That is why this panel has never come up on the S3.
+ *
+ *   Vext = GPIO36, driven LOW. i2c_scan's auto-generated summary line
+ *     says "rail state didn't matter" — that verdict is too strong and
+ *     is not what the per-state detail shows. With Vext LOW the bus is
+ *     idle and the panel ACKs with or without a reset pulse. With Vext
+ *     HIGH or FLOATING, GPIO17 reads 0 with a pullup on it (line held
+ *     low, pair skipped) and it only ACKs after GPIO21 is pulsed. LOW
+ *     is the clean state, so LOW is what we drive.
+ *
+ *   RST_OLED = GPIO21. Pulsing it low ~10 ms then releasing frees the
+ *     bus in the non-LOW rail states. With Vext already LOW it is not
+ *     required, but it costs 160 ms once at boot and removes a whole
+ *     class of bring-up failure, so we do it anyway. GPIO21 is not a
+ *     bus pin in this configuration, so there is no conflict.
+ * ------------------------------------------------------------------ */
+#if CONFIG_IDF_TARGET_ESP32S3
+#define OLED_SDA            17
+#define OLED_SCL            18
+#define OLED_VEXT_GPIO      36     /* switched 3V3 rail; ON = driven LOW */
+#define OLED_RST_GPIO       21     /* RST_OLED, active low */
+#define OLED_VEXT_SETTLE_MS 300    /* rail rise + panel power-on; i2c_scan's */
+#define OLED_RST_LOW_MS     10     /* SSD1306 needs >3 us; 10 ms is free */
+#define OLED_RST_SETTLE_MS  150
+#else                              /* ESP32 D0WD desk node — do not change */
 #define OLED_SDA            21
 #define OLED_SCL            22
+#endif
 #define OLED_ROTATE_180     true
 #define MOTION_SC           64
+
+/* Display layout: 5x7 font on a 6x8 cell => 21 chars x 8 page-rows.
+ *   page 0     node id, uptime, calibration state ( + MOVE flag )
+ *   page 1     frames/sec, cumulative drops, distinct MAC count
+ *   page 2     per-beacon RSSI
+ *   page 3     cadence warning / waiting-for-TX hint (blank when healthy)
+ *   pages 4-7  live amplitude band, 64 subcarriers x 2 px, 32 px tall
+ *
+ * The band is on the BOTTOM half on purpose. oled_vbar() is anchored to
+ * the bottom edge and has no upper clip (common/node_hal/ssd1306.c), so
+ * a bottom-half band needs no new driver primitive — clamping the height
+ * to 32 is the whole implementation. That keeps this change inside
+ * csi_rx and leaves node_hal (and therefore csi_cfo) untouched. */
+#define DISP_COLS           21
+#define DISP_LINE_BUF       (DISP_COLS + 1)
+#define BAND_H              32     /* pixels; pages 4..7 */
+/* Original full-height band used amp * 1.15 clipped at 46 px. Scaling
+ * that same dynamic range into 32 px: 1.15 * (32/46) = 0.80. */
+#define BAND_SCALE          0.80f
+#define MOTION_MOVE_THRESH  2.5f
+
+/* Per-source accounting. main.c previously tracked only s_pkt_total and
+ * s_last_rssi, which cannot answer "is B1 still on cadence" — the thing
+ * that went unnoticed on 2026-08-22 when B1 sat at 6.47 fps. This is the
+ * minimum state added: one fixed-size table, no allocation, one linear
+ * scan per drained frame.
+ *
+ * Slots 0..2 are permanently reserved for the three expected beacons so
+ * ambient traffic can never evict them (RFF_PROMISCUOUS is 1, so CSI
+ * fires for every decodable frame on the channel and ambient MACs are
+ * plentiful). The MAC list mirrors pc/occ/__init__.py BEACON_MACS; this
+ * is the display's own copy of it, not an import, and it will go stale
+ * if that file changes. */
+#define BEACON_N            3
+#define MAC_TABLE_MAX       24
+/* pc/node_census.py BEACON_MIN_FPS = 10.0, per docs/LOT_HYPOTHESIS.md
+ * section 3. Same floor pc/diagnose.py checks after the fact; this puts
+ * it on the device, live. Held as tenths to keep the compare integral. */
+#define BEACON_MIN_FPS_X10  100
 
 /* Optional hard filter on the TX beacon MAC; all-zero accepts any. */
 static const uint8_t TX_FILTER_MAC[6] = {0, 0, 0, 0, 0, 0};
@@ -89,6 +174,69 @@ static volatile uint32_t s_pkt_total = 0;
 static volatile int      s_last_rssi = 0;
 static volatile float    s_motion = 0.0f;
 static float s_amp_view[MOTION_SC];
+static uint8_t s_node_id = 0;                 /* set once, before tasks start */
+
+/* Expected beacons. Order fixes the reserved slot index. */
+static const uint8_t BEACON_MAC[BEACON_N][6] = {
+    {0xa4, 0xf0, 0x0f, 0x77, 0x91, 0x20},     /* B1 reference, wall outlet */
+    {0x28, 0x05, 0xa5, 0x2f, 0xfa, 0x48},     /* B2 */
+    {0xf4, 0x2d, 0xc9, 0x70, 0x72, 0x30},     /* B3 */
+};
+static const char *const BEACON_NAME[BEACON_N] = {"B1", "B2", "B3"};
+
+typedef struct {
+    uint8_t  mac[6];
+    bool     used;
+    volatile int8_t   rssi;    /* most recent */
+    volatile uint32_t count;   /* frames drained since boot */
+} mac_slot_t;
+
+/* Writer: csi_drain_task only. Reader: display_task only.
+ * No lock. `count` and `rssi` are single aligned words, so a reader sees
+ * either the old or the new value, never a blend. The one true race is
+ * an ambient slot being claimed while the display counts slots: `used`
+ * may be visible before `mac`/`count`. That is harmless here because the
+ * display never renders a MAC — the worst outcome is the distinct-MAC
+ * count reading one high for a single 250 ms frame. Slots 0..2 are
+ * filled before any task exists, so the beacon rows never race at all. */
+static mac_slot_t s_macs[MAC_TABLE_MAX];
+static volatile bool s_mac_overflow = false;
+
+static void source_table_init(void)
+{
+    for (int i = 0; i < BEACON_N; i++) {
+        memcpy(s_macs[i].mac, BEACON_MAC[i], 6);
+        s_macs[i].used  = true;
+        s_macs[i].count = 0;      /* 0 == never heard, rendered as "--" */
+        s_macs[i].rssi  = 0;
+    }
+}
+
+/* Called from the drain task, once per frame. Bounded work: at most
+ * MAC_TABLE_MAX 6-byte memcmps, no allocation, no blocking. */
+static void record_source(const uint8_t mac[6], int8_t rssi)
+{
+    for (int i = 0; i < MAC_TABLE_MAX; i++) {
+        if (s_macs[i].used && memcmp(s_macs[i].mac, mac, 6) == 0) {
+            s_macs[i].rssi = rssi;
+            s_macs[i].count++;
+            return;
+        }
+    }
+    for (int i = BEACON_N; i < MAC_TABLE_MAX; i++) {
+        if (!s_macs[i].used) {
+            memcpy(s_macs[i].mac, mac, 6);
+            s_macs[i].rssi  = rssi;
+            s_macs[i].count = 1;
+            s_macs[i].used  = true;
+            return;
+        }
+    }
+    /* Table full. The displayed distinct count becomes a lower bound and
+     * is marked "+" so it is never mistaken for a complete census; the
+     * authoritative one is pc/mac_census.py over the captured CSV. */
+    s_mac_overflow = true;
+}
 
 /* ESP-NOW receive callback: extract beacon sequence number. */
 static void espnow_recv_cb(const esp_now_recv_info_t *info,
@@ -174,6 +322,7 @@ static void csi_drain_task(void *arg)
         hal_rf_liveness_kick();
         s_pkt_total++;
         s_last_rssi = s.rssi;
+        record_source(s.mac, s.rssi);
         cal_feed(s.noise_floor, s.rssi);
         update_motion(&s);
         if (cal_gate_open()) {
@@ -204,45 +353,227 @@ static void status_task(void *arg)
     }
 }
 
-/* Status display: calibration countdown, then live spectrum. */
+/* Panel power/reset sequence. Must run before any oled_init() — both the
+ * normal path and the safe-boot diagnostic console call oled_init(). */
+#if CONFIG_IDF_TARGET_ESP32S3
+static void oled_panel_power_up(void)
+{
+    gpio_config_t vext = {
+        .pin_bit_mask = 1ULL << OLED_VEXT_GPIO,
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_reset_pin((gpio_num_t)OLED_VEXT_GPIO);
+    gpio_config(&vext);
+    gpio_set_level((gpio_num_t)OLED_VEXT_GPIO, 0);      /* rail ON */
+    vTaskDelay(pdMS_TO_TICKS(OLED_VEXT_SETTLE_MS));
+
+    gpio_config_t rst = {
+        .pin_bit_mask = 1ULL << OLED_RST_GPIO,
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_reset_pin((gpio_num_t)OLED_RST_GPIO);
+    gpio_config(&rst);
+    gpio_set_level((gpio_num_t)OLED_RST_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(OLED_RST_LOW_MS));
+    gpio_set_level((gpio_num_t)OLED_RST_GPIO, 1);       /* released */
+    vTaskDelay(pdMS_TO_TICKS(OLED_RST_SETTLE_MS));
+    /* GPIO21 is left driven high. It is not a bus pin in this wiring. */
+}
+#else
+/* D0WD desk node: the panel is on the always-on 3V3 rail and has no
+ * software-controlled reset. Deliberately a no-op so that build is
+ * behaviourally identical to before this change. */
+static void oled_panel_power_up(void) { }
+#endif
+
+/* snprintf with a cursor that can never run past the buffer. Note that
+ * snprintf returns the length it WOULD have written, so appending with a
+ * raw running offset silently walks off the end on truncation. */
+static int line_cat(char *dst, size_t cap, int at, const char *fmt, ...)
+{
+    if (at < 0) {
+        at = 0;
+    }
+    if ((size_t)at >= cap - 1) {
+        return (int)cap - 1;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(dst + at, cap - at, fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+        return at;
+    }
+    at += n;
+    if ((size_t)at > cap - 1) {
+        at = (int)cap - 1;
+    }
+    return at;
+}
+
+/* Status display. See the layout comment at the top of this file.
+ *
+ * Drain-path contract: this task is priority 3, csi_drain_task is
+ * priority 5, so the preemptive scheduler puts the drain in front of
+ * every part of this function including the blocking I2C write. Nothing
+ * here is shared with the drain path under a lock, and nothing here
+ * touches the CSI queue, stdout or the WiFi stack. */
 static void display_task(void *arg)
 {
-    uint32_t prev_total = 0;
-    char buf[32];
+    static uint32_t prev_total = 0;
+    static uint32_t prev_count[BEACON_N];
+    static uint32_t fps_total = 0;
+    static uint32_t beacon_fps_x10[BEACON_N];
+    bool have_rates = false;
+    int  tick = 0;
+    char line[DISP_LINE_BUF];
 
     while (1) {
-        uint32_t total = s_pkt_total;
-        uint32_t rate = (total - prev_total) * 4;
-        prev_total = total;
+        /* Rates over a full second, recomputed every 4th refresh. A
+         * 250 ms delta of a ~175 fps stream quantizes to ±4 fps, which
+         * is far too coarse to compare against a 10 fps floor. */
+        if (++tick >= 4) {
+            tick = 0;
+            uint32_t total = s_pkt_total;
+            fps_total  = total - prev_total;
+            prev_total = total;
+            for (int i = 0; i < BEACON_N; i++) {
+                uint32_t c = s_macs[i].count;
+                beacon_fps_x10[i] = (c - prev_count[i]) * 10;
+                prev_count[i] = c;
+            }
+            have_rates = true;
+        }
+
+        cal_state_t st = cal_get_state();
+        uint32_t up = (uint32_t)(esp_timer_get_time() / 1000000);
+        /* Hours clamped so the row can never grow past its column
+         * budget. A >99 h uptime is a >4 day run; the authoritative
+         * uptime is uptime_s in the STATUS telemetry frame, not here. */
+        uint32_t uh = up / 3600;
+        if (uh > 99) {
+            uh = 99;
+        }
 
         oled_clear();
-        oled_text(0, 0, "CSI", 2);
-        snprintf(buf, sizeof(buf), "%lu/S", (unsigned long)rate);
-        oled_text(46, 0, buf, 1);
-        snprintf(buf, sizeof(buf), "%dDB M%.1f", s_last_rssi, (double)s_motion);
-        oled_text(46, 1, buf, 1);
 
-        if (cal_get_state() == CAL_RUNNING) {
-            snprintf(buf, sizeof(buf), "CAL %uS", cal_remaining_s());
-            oled_text(0, 3, buf, 2);
-            snprintf(buf, sizeof(buf), "NOISE %.1f DBM",
-                     (double)cal_noise_floor());
-            oled_text(0, 6, buf, 1);
-        } else if (total == 0) {
-            oled_text(0, 4, "WAITING FOR TX...", 1);
-            snprintf(buf, sizeof(buf), "CHANNEL %d", CSI_WIFI_CHANNEL);
-            oled_text(0, 6, buf, 1);
-        } else {
-            for (int k = 0; k < MOTION_SC; k++) {
-                int h = (int)(s_amp_view[k] * 1.15f);
-                if (h > 46) h = 46;
-                oled_vbar(k * 2, h);
-                oled_vbar(k * 2 + 1, h);
+        /* --- page 0: identity, uptime, calibration ------------------ */
+        int n = line_cat(line, sizeof(line), 0, "N%u %02u:%02u:%02u ",
+                         (unsigned)s_node_id, (unsigned)uh,
+                         (unsigned)((up / 60) % 60), (unsigned)(up % 60));
+        if (st == CAL_RUNNING) {
+            unsigned rem = cal_remaining_s();
+            if (rem > 999) {
+                n = line_cat(line, sizeof(line), n, "C%uM", rem / 60);
+            } else {
+                n = line_cat(line, sizeof(line), n, "C%uS", rem);
             }
-            if (s_motion > 2.5f) {
-                oled_text(98, 2, "MOVE", 1);
+        } else {
+            n = line_cat(line, sizeof(line), n,
+                         (st == CAL_BYPASS) ? "BYP" : "RDY");
+        }
+        oled_text(0, 0, line, 1);
+        /* MOVE sits in the last 4 cells of page 0. Only drawn outside
+         * calibration, where the countdown owns that space. */
+        if (st != CAL_RUNNING && s_motion > MOTION_MOVE_THRESH) {
+            oled_text(104, 0, "MOVE", 1);
+        }
+
+        /* --- page 1: throughput, drops, distinct sources ------------ */
+        int distinct = 0;
+        for (int i = 0; i < MAC_TABLE_MAX; i++) {
+            if (s_macs[i].used && s_macs[i].count) {
+                distinct++;
             }
         }
+        /* s_dropped is a cumulative u16 and wraps; it is the same value
+         * the STATUS frame carries, so host and panel agree. */
+        line_cat(line, sizeof(line), 0, "%luF/S D%u M%d%s",
+                 (unsigned long)fps_total, (unsigned)s_dropped, distinct,
+                 s_mac_overflow ? "+" : "");
+        oled_text(0, 1, line, 1);
+
+        /* --- page 2: per-beacon RSSI -------------------------------- */
+        n = 0;
+        for (int i = 0; i < BEACON_N; i++) {
+            n = line_cat(line, sizeof(line), n, "%s%s",
+                         i ? " " : "", BEACON_NAME[i]);
+            if (s_macs[i].count) {
+                n = line_cat(line, sizeof(line), n, "%4d",
+                             (int)s_macs[i].rssi);
+            } else {
+                n = line_cat(line, sizeof(line), n, "  --");
+            }
+        }
+        oled_text(0, 2, line, 1);
+
+        /* --- page 3: cadence warning, else blank -------------------- */
+        if (s_pkt_total == 0) {
+            line_cat(line, sizeof(line), 0, "WAITING FOR TX CH%d",
+                     CSI_WIFI_CHANNEL);
+            oled_text(0, 3, line, 1);
+        } else if (have_rates) {
+            /* Only beacons that have actually been heard are checked. A
+             * beacon that has never transmitted already reads "--" on
+             * page 2; calling that "below the floor" would conflate
+             * "slow" with "absent". */
+            n = 0;
+            for (int i = 0; i < BEACON_N; i++) {
+                if (!s_macs[i].count) {
+                    continue;
+                }
+                if (beacon_fps_x10[i] >= BEACON_MIN_FPS_X10) {
+                    continue;
+                }
+                /* "!B1 6.0" then " B2 2.0"... — 7 cells each, so all
+                 * three slow beacons still fit the 21-cell row. */
+                n = line_cat(line, sizeof(line), n, "%s%s %u.%u",
+                             (n == 0) ? "!" : " ", BEACON_NAME[i],
+                             (unsigned)(beacon_fps_x10[i] / 10),
+                             (unsigned)(beacon_fps_x10[i] % 10));
+            }
+            if (n) {
+                /* Name the floor only when there is room left for it;
+                 * with all three slow the rates themselves fill the row
+                 * and the floor is the one thing that never changes. */
+                if (n <= DISP_COLS - 4) {
+                    line_cat(line, sizeof(line), n, " <%u",
+                             (unsigned)(BEACON_MIN_FPS_X10 / 10));
+                }
+                oled_text(0, 3, line, 1);
+            } else if (st == CAL_RUNNING) {
+                /* Nothing to warn about and the baseline window is still
+                 * open: reuse the row for the noise floor, which the old
+                 * layout showed and this one otherwise loses.
+                 * Rendered from integer tenths on purpose — the previous
+                 * code used "%.1f", which silently prints nothing useful
+                 * if CONFIG_NEWLIB_NANO_FORMAT is ever turned on. */
+                int nf10 = (int)(cal_noise_floor() * 10.0f);
+                int frac = nf10 % 10;
+                line_cat(line, sizeof(line), 0, "NOISE %d.%dDBM",
+                         nf10 / 10, frac < 0 ? -frac : frac);
+                oled_text(0, 3, line, 1);
+            }
+        }
+
+        /* --- pages 4..7: live amplitude band ------------------------ */
+        for (int k = 0; k < MOTION_SC; k++) {
+            int h = (int)(s_amp_view[k] * BAND_SCALE);
+            if (h > BAND_H) {
+                h = BAND_H;
+            } else if (h < 1 && s_amp_view[k] > 0.0f) {
+                h = 1;              /* a live-but-tiny bin stays visible */
+            }
+            oled_vbar(k * 2, h);
+            oled_vbar(k * 2 + 1, h);
+        }
+
         oled_flush();
         vTaskDelay(pdMS_TO_TICKS(250));
     }
@@ -284,13 +615,31 @@ void app_main(void)
 {
     ESP_ERROR_CHECK(hal_boot_init());
 
+    /* Power and reset the panel before anything can call oled_init() —
+     * the safe-boot console below is one of those callers. No-op on the
+     * D0WD. */
+    oled_panel_power_up();
+
     if (hal_safe_boot_requested(SAFE_BOOT_PIN, SAFE_BOOT_WINDOW_MS)) {
+        /* NOTE (2026-08-22, S3 only, deliberately not fixed in this
+         * pass): hal_diag_console() is hard-coded to UART_NUM_0
+         * (common/node_hal/node_hal.c) — it re-baudrates UART0, installs
+         * the UART driver on it, and reads the operator's commands from
+         * it. sdkconfig.defaults.esp32s3 moved this build's console to
+         * USB-Serial-JTAG, so on the S3 that text now goes out a pin
+         * nobody reads and the console accepts no input. The OLED half
+         * of the diagnostic screen below still works, and that is all
+         * safe boot gives you on the S3 today. Tracked as a V2
+         * prerequisite in docs/V2_SPEC.md; out of scope here. The D0WD
+         * is unaffected — its console is UART0. */
         hal_diag_console(OLED_SDA, OLED_SCL, OLED_ROTATE_180);
         /* never returns */
     }
 
     node_identity_t id;
     ESP_ERROR_CHECK(hal_identity_load(&id));
+    s_node_id = id.node_id;
+    source_table_init();
     tlm_init(id.node_id, id.env_id);
     cal_start(id.cal_seconds);
     ESP_LOGI(TAG, "node_id=%u env_id=%u cal=%us reset_reason=%u crashes=%u",
