@@ -118,7 +118,17 @@ is a repeated exploratory pattern, not a measured STO mechanism.
 
 ## Reproduction
 
-From the repository root:
+**These commands cannot be run from a clone.** They read from
+`share/deep_dive/`, which is not published: it is intermediate replay output
+derived from the raw captures, and it is excluded for the same reason those
+are. The scripts below are complete and readable, and the numbers in this
+document came out of them, but regenerating them requires the local replay
+tree.
+
+What *can* be rerun from a clone is `share/csi-8-nights/`, where every table in
+`data/` regenerates from `per_window_features/` using the code in `scripts/`.
+
+From the repository root, with the local replay output present:
 
 ```powershell
 python share/analyze_equivalent_delay.py --multiscale share/deep_dive/multiscale --out share/deep_dive/equivalent_delay
