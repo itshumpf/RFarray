@@ -74,6 +74,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from rff import protocol                                          # noqa: E402
 from rff.protocol import (decode_stream, unwrap_ts, CAL_STATES,   # noqa: E402
                           RESET_REASONS, HDR_V1, HDR_V2)
 from rff.serialio import open_serial                              # noqa: E402
@@ -212,9 +213,13 @@ def frame_bytes(rec):
     """
     if rec["type"] != "csi":
         return None
-    if rec["node_id"] is None:                    # v1 frame
-        return HDR_V1 + rec["len"] + 1
-    return HDR_V2 + (rec["len"] + 15) + 1         # v2 CSI payload prefix = 15
+    # Derived from pc/rff/protocol.py rather than restated. The previous
+    # `HDR_V2 + (rec["len"] + 15) + 1` was arithmetically correct — the
+    # parser sets rec["len"] = length - CSI_PREFIX, so it reconstructs the
+    # frame exactly — but it open-coded both the header size and the 15-byte
+    # prefix, so a header change would have made it silently wrong here
+    # while the parser stayed right. docs/V2_READY.md 1.5.
+    return protocol.frame_bytes(rec["len"], v2=rec["node_id"] is not None)
 
 
 def parse_expect(spec):

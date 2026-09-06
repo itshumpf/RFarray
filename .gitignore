@@ -23,3 +23,14 @@ data/rff.db
 *.csv
 
 data/fingerprints/
+
+# Exception: the published eight-night review package ships its derived tables.
+# These are computed outputs, not captures — six small CSVs that the scripts in
+# share/csi-8-nights/scripts/ regenerate from share/csi-8-nights/per_window_features/.
+!share/csi-8-nights/data/*.csv
+
+# Never publish the intermediate replay output — 3.4 GB of it.
+share/deep_dive/
+
+# fetched external covariates (OJC hourly tmpf/relh/mslp) — not our measurement
+data/weather_ojc_*

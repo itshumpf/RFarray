@@ -1,0 +1,36 @@
+
+=== Filter accounting ===
+  time window is seconds of pc_time_us since the first decodable frame of each input file
+  CSV data rows read                               326510
+  excluded by --after/--before [499.9s, 2299.9s)    70868
+  frames reaching the DSP                          255642
+  no RANSAC fit (unusable frame)                        6
+  rejected by --min-inlier 0.6 (dsp default)        68062
+  rejected by --max-resid 0.8 (dsp default)             0
+  frames accepted into windows                     187574
+  windows formed (after)                             2929
+  windows at dsp defaults, same frames (before)      2929
+  note: --max-resid 0.8 rejected NOTHING — it passed 100% of the 255636 fitted frames.
+  note: 21.7% of rows were cut by the time window; every figure below describes the remainder only.
+
+=== Per-source clock signatures (raw) ===
+source               wins sess      CFO Hz   +-IQR    SFO rad/sc     +-IQR    KF cfo    KF sfo
+28:05:a5:2f:fa:48    1360    1        +0.4     4.2       +0.0065    0.0010      +0.3   +0.0070
+a4:f0:0f:77:91:20    1228    1        +0.1     3.7       +0.0009    0.0011      +0.0   +0.0008
+f4:2d:c9:70:72:30     341    1        -0.1     3.9       +0.0793    0.0024      -0.2   +0.0793
+
+=== Pairwise separation (centroid Mahalanobis distance, pooled cov) ===
+            2f:fa:48  77:91:20  70:72:30
+  2f:fa:48         -       5.6      76.3
+  77:91:20       5.6         -      81.9
+  70:72:30      76.3      81.9         -
+
+min separation 5.6sigma, median 76.3sigma  (rule of thumb: >3sigma reliably separable)
+
+=== Blind holdout classification (train 60% / test 40%, chronological) ===
+28:05:a5:2f:fa:48    544 test windows  correct 520  stranger  24
+a4:f0:0f:77:91:20    492 test windows  correct 486  stranger   6
+f4:2d:c9:70:72:30    137 test windows  correct 137  stranger   0
+
+accuracy 1143/1173 = 97.4%   (rejected as stranger: 30, chi2_95=5.991, chi2_99=9.21)
+SCOPE: filtered run — 255642 of 326510 rows reached the DSP, 2929 windows formed (dsp defaults on the same frames: 2929). This accuracy describes that subset only; see the filter accounting above.

@@ -1,0 +1,35 @@
+
+=== Filter accounting ===
+  time window is seconds of pc_time_us since the first decodable frame of each input file
+  CSV data rows read                               410397
+  excluded by --after/--before [500s, 2300s)        89601
+  frames reaching the DSP                          320796
+  no RANSAC fit (unusable frame)                        0
+  rejected by --min-inlier 0.6 (dsp default)         1071
+  rejected by --max-resid 0.8 (dsp default)             0
+  frames accepted into windows                     319725
+  windows formed (after)                             4994
+  windows at dsp defaults, same frames (before)      4994
+  note: --max-resid 0.8 rejected NOTHING — it passed 100% of the 320796 fitted frames.
+  note: 21.8% of rows were cut by the time window; every figure below describes the remainder only.
+
+(skipping 1 source(s) with < 4 windows: bc:96:e5:af:e5:7a)
+
+=== Per-source clock signatures (raw) ===
+source               wins sess      CFO Hz   +-IQR    SFO rad/sc     +-IQR    KF cfo    KF sfo
+28:05:a5:2f:fa:48    2467    1        +0.3     8.9       +0.0116    0.0007      +0.1   +0.0110
+f4:2d:c9:70:72:30    2525    1        +0.0     8.1       +0.0183    0.0007      +0.0   +0.0178
+
+=== Pairwise separation (centroid Mahalanobis distance, pooled cov) ===
+            2f:fa:48  70:72:30
+  2f:fa:48         -      15.8
+  70:72:30      15.8         -
+
+min separation 15.8sigma, median 15.8sigma  (rule of thumb: >3sigma reliably separable)
+
+=== Blind holdout classification (train 60% / test 40%, chronological) ===
+28:05:a5:2f:fa:48    987 test windows  correct 805  stranger 182
+f4:2d:c9:70:72:30    1010 test windows  correct 988  stranger  22
+
+accuracy 1793/1997 = 89.8%   (rejected as stranger: 204, chi2_95=5.991, chi2_99=9.21)
+SCOPE: filtered run — 320796 of 410397 rows reached the DSP, 4994 windows formed (dsp defaults on the same frames: 4994). This accuracy describes that subset only; see the filter accounting above.

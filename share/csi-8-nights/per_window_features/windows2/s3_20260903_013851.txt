@@ -1,0 +1,36 @@
+
+=== Filter accounting ===
+  time window is seconds of pc_time_us since the first decodable frame of each input file
+  CSV data rows read                               584455
+  excluded by --after/--before [499.9s, 2299.9s)   126387
+  frames reaching the DSP                          458068
+  no RANSAC fit (unusable frame)                        0
+  rejected by --min-inlier 0.6 (dsp default)         1036
+  rejected by --max-resid 0.8 (dsp default)             0
+  frames accepted into windows                     457032
+  windows formed (after)                             7139
+  windows at dsp defaults, same frames (before)      7139
+  note: --max-resid 0.8 rejected NOTHING — it passed 100% of the 458068 fitted frames.
+  note: 21.6% of rows were cut by the time window; every figure below describes the remainder only.
+
+=== Per-source clock signatures (raw) ===
+source               wins sess      CFO Hz   +-IQR    SFO rad/sc     +-IQR    KF cfo    KF sfo
+28:05:a5:2f:fa:48    2419    1        -0.6     7.6       +0.0071    0.0004      -0.9   +0.0071
+a4:f0:0f:77:91:20    2244    1        +0.0     6.4       +0.0051    0.0007      -0.2   +0.0052
+f4:2d:c9:70:72:30    2476    1        -0.2     7.6       +0.0205    0.0007      -0.2   +0.0206
+
+=== Pairwise separation (centroid Mahalanobis distance, pooled cov) ===
+            2f:fa:48  77:91:20  70:72:30
+  2f:fa:48         -       4.4      29.0
+  77:91:20       4.4         -      33.3
+  70:72:30      29.0      33.3         -
+
+min separation 4.4sigma, median 29.0sigma  (rule of thumb: >3sigma reliably separable)
+
+=== Blind holdout classification (train 60% / test 40%, chronological) ===
+28:05:a5:2f:fa:48    968 test windows  correct 947  stranger  14  confused-> 77:91:20x7
+a4:f0:0f:77:91:20    898 test windows  correct 871  stranger   6  confused-> 2f:fa:48x21
+f4:2d:c9:70:72:30    991 test windows  correct 986  stranger   5
+
+accuracy 2804/2857 = 98.1%   (rejected as stranger: 25, chi2_95=5.991, chi2_99=9.21)
+SCOPE: filtered run — 458068 of 584455 rows reached the DSP, 7139 windows formed (dsp defaults on the same frames: 7139). This accuracy describes that subset only; see the filter accounting above.

@@ -39,9 +39,19 @@ SHADE = " .:-=+*#%@"
 
 # ---- ANSI -------------------------------------------------------------------
 CSI0 = "\x1b["
+# Viridis, not a hue rainbow. A rainbow ramp is non-monotonic in perceived
+# brightness — yellow reads brighter than blue at a lower value — so the eye
+# invents boundaries that aren't in the data. Viridis is perceptually uniform:
+# brighter always means more. Same reason matplotlib retired `jet`.
+VIRIDIS = [(68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
+           (38, 130, 142), (31, 158, 137), (53, 183, 121), (109, 205, 89),
+           (180, 222, 44), (253, 231, 37)]
+
 def green(intensity):
-    g = int(intensity * 5)
-    return f"{CSI0}38;5;{16 + g*6}m"
+    """Truecolor viridis ramp. Name kept so nothing else has to change."""
+    i = min(len(VIRIDIS) - 1, max(0, int(intensity * (len(VIRIDIS) - 1))))
+    r, g, b = VIRIDIS[i]
+    return f"{CSI0}38;2;{r};{g};{b}m"
 
 HIDE, SHOW = f"{CSI0}?25l", f"{CSI0}?25h"
 HOME, CLEAR = f"{CSI0}H", f"{CSI0}2J"
@@ -96,6 +106,47 @@ class Node:
             self.rain.append(row)
             self.status = "live"
 
+# Current event label, written into every row until it changes. A one-element
+# list rather than a bare global so the reader threads see updates without a
+# lock — CPython list-item assignment is atomic, and a torn read here would
+# cost one mislabelled row, not a capture.
+#
+# Why this exists: `label` has been in HEADER since v1 and nothing ever wrote
+# to it. Every experiment so far was reconstructed from wall-clock times typed
+# into a chat window afterwards, and on 2026-08-23 two of seven logged events
+# turned out to be wrong when checked against the frames.
+LABEL = [""]
+
+
+def label_prompt():
+    """Blocking prompt, called from the render loop when a key is pressed.
+
+    Wrapped by its caller: if anything in here raises, labelling is skipped
+    and the capture keeps running. Losing a label is an inconvenience.
+    Losing a capture is an evening.
+    """
+    sys.stdout.write(SHOW + f"\n{CSI0}0m label (empty to clear): ")
+    sys.stdout.flush()
+    try:
+        text = sys.stdin.readline().strip()
+    finally:
+        sys.stdout.write(HIDE + CLEAR)
+        sys.stdout.flush()
+    LABEL[0] = text[:60]
+
+
+def key_pressed():
+    """True if a key is waiting. Windows only; silently False elsewhere."""
+    try:
+        import msvcrt
+        if msvcrt.kbhit():
+            msvcrt.getwch()          # consume the keypress itself
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def reader_thread(node, stop, baud):
     import csv as csvmod
     os.makedirs(RAW_DIR, exist_ok=True)
@@ -126,7 +177,7 @@ def reader_thread(node, stop, baud):
                                    + (f" {rec['cal_remaining_s']}s"
                                       if rec["cal_state"] == 0 else ""))
                     continue
-                w.writerow([int(time.time() * 1e6), "", rec["seq"], rec["mac"],
+                w.writerow([int(time.time() * 1e6), LABEL[0], rec["seq"], rec["mac"],
                             rec["rssi"], rec["noise"], rec["channel"], rec["ts"],
                             rec["len"], ",".join(map(str, rec["csi"])),
                             rec["node_id"], rec["env_id"], rec["dropped"]])
@@ -142,6 +193,10 @@ def render(nodes, start):
     out.append(f"{GHEAD}{BOLD} CSI ARRAY // LIVE CAPTURE {RESET}"
                f"{GDIM}  up {el//3600:02d}:{(el%3600)//60:02d}:{el%60:02d}"
                f"   {grand:,} frames total{RESET}{CSI0}K\n")
+    lab = LABEL[0]
+    out.append(f"{GDIM} label: {RESET}"
+               + (f"{GHEAD}{lab}{RESET}" if lab else f"{GDIM}(none){RESET}")
+               + f"{GDIM}   — press any key to set{RESET}{CSI0}K\n")
     out.append(f"{GDIM} {'─'*58}{RESET}{CSI0}K\n")
     for n in nodes:
         with n.lock:
@@ -189,6 +244,11 @@ def main():
     try:
         while True:
             render(nodes, start=main.start)
+            if key_pressed():
+                try:
+                    label_prompt()
+                except Exception:
+                    pass          # never let labelling kill a capture
             time.sleep(0.1)
     except KeyboardInterrupt: pass
     finally:

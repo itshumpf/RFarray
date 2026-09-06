@@ -83,6 +83,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from rff import protocol                                          # noqa: E402
 from rff.serialio import open_serial                              # noqa: E402
 
 # ---------------------------------------------------------------- protocol
@@ -123,10 +124,15 @@ for _s in range(256):
 
 # ------------------------------------------------------------- conversions
 # The one figure here that comes from a repo file rather than from the
-# operator: the v2 CSI frame is 12 B header + 15 B CSI payload prefix +
-# 256 B CSI + 1 B xor (firmware/common/telemetry/include/telemetry.h,
-# and pc/rff/protocol.py HDR_V2).
-CSI_FRAME_BYTES = 12 + 15 + 256 + 1         # 284
+# operator. It is now DERIVED from pc/rff/protocol.py rather than restated:
+# a literal `12 + 15 + 256 + 1` here was a third copy of a layout defined in
+# two other places, and it silently assumed every frame carries 256 CSI
+# bytes. The parser accepts 128 and 384 too (CSI_MAX + 15), and while the
+# three beacons are 100% len-256 (docs/NODE_CENSUS.md 2), ambient sources
+# are not — so the assumption is wrong for exactly the population the
+# ambient work cares about. docs/V2_READY.md 1.5.
+DEFAULT_CSI_LEN = 256                       # beacon traffic; override below
+CSI_FRAME_BYTES = protocol.frame_bytes(DEFAULT_CSI_LEN)      # 284
 
 # These two are OPERATOR-SUPPLIED for this session and are not read out of
 # any repo artifact. They are CLI-overridable and are labelled as such

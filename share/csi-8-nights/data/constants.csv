@@ -1,0 +1,11 @@
+name,value,units,source
+BETWEEN_UNIT_SD,0.00237,rad/subcarrier,pc/exp_ambient_separation.py:79 (sd over the 3 units of their grand means)
+WITHIN_UNIT_SD,0.0057,rad/subcarrier,pc/exp_thermal_evidence.py:130
+BETWEEN_UNIT_SD_CFO,0.053,Hz,"derived 2026-09-04 from these 7 nights, same construction"
+window_frames,64,frames,rff.dsp.WindowAggregator default
+min_inlier_ratio,0.6,,rff.dsp.WindowAggregator default
+max_resid,0.8,,rff.dsp.WindowAggregator default
+CHI2_95,5.991,,"rff/discriminator.py:23, 2 dof"
+CHI2_99,9.21,,"rff/discriminator.py:24, 2 dof"
+train_fraction,0.6,,rff_offline.TRAIN_FRACTION
+n_classes,3,sources,chance = 33.3%
