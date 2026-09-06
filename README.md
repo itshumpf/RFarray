@@ -201,9 +201,13 @@ pc/                       33,508 lines of Python across 61 files
   exp_*.py                  one read-only script per docs/ experiment
   capture.py / collect.py   serial → CSV
 
-data/raw/                 14,986,846 frames, 546 source MACs, 62 files, ~13 GB
+data/raw/                 118 session files, 99.5 GiB — counted from disk
+                          2026-09-06. The sixteen canonical eight-night files
+                          hold exactly 69,688,145 rows in 54.92 GiB; at the same
+                          bytes-per-row the full corpus is in the region of 126
+                          million rows, which is an extrapolation and not a count.
                           GITIGNORED — see Data availability
-docs/                     ~40 pre-registered experiment writeups
+docs/                     59 pre-registered experiment writeups
 ```
 
 Line counts re-measured 2026-08-27 and include this repo's own experiment
